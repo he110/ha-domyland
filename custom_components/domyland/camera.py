@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
+import aiohttp
+from aiohttp import web
+from homeassistant.components.camera import Camera
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import (
+    async_aiohttp_proxy_web,
+    async_get_clientsession,
+)
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN
@@ -43,9 +48,13 @@ async def async_setup_entry(
 
 
 class DomylandCamera(DomylandBuildingEntity, Camera):
-    """MJPEG-камера. streamURL перевыпускается координатором каждые N минут."""
+    """MJPEG-камера UJIN.
 
-    _attr_supported_features = CameraEntityFeature.STREAM
+    Поток отдаётся как `multipart/x-mixed-replace` (чистый MJPEG), поэтому его
+    нужно проксировать в браузер напрямую, а НЕ через stream-компонент HA (тот
+    рассчитан на RTSP/HLS и на MJPEG деградирует до покадрового опроса — рывки).
+    Подписанный streamURL перевыпускается координатором каждые N минут.
+    """
 
     def __init__(
         self, coordinator: DomylandCoordinator, building_id: int, cam_id: int
@@ -71,28 +80,39 @@ class DomylandCamera(DomylandBuildingEntity, Camera):
     def available(self) -> bool:
         return super().available and self._camera is not None
 
-    async def stream_source(self) -> str | None:
-        """Актуальный MJPEG-URL (подписан, обновляется в координаторе)."""
+    def _stream_url(self) -> str | None:
         cam = self._camera
         return cam.get("streamURL") if cam else None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Один кадр из MJPEG-потока."""
-        cam = self._camera
-        if not cam:
-            return None
-        url = cam.get("streamURL")
+        """Один кадр из MJPEG-потока (для превью и снапшотов)."""
+        url = self._stream_url()
         if not url:
             return None
         session = async_get_clientsession(self.hass)
         return await self._async_mjpeg_single_frame(session, url)
 
-    async def _async_mjpeg_single_frame(self, session, url: str) -> bytes | None:
+    async def handle_async_mjpeg_stream(
+        self, request: web.Request
+    ) -> web.StreamResponse | None:
+        """Живой просмотр: проксируем MJPEG-мультипарт UJIN прямо в браузер."""
+        url = self._stream_url()
+        if not url:
+            return None
+        session = async_get_clientsession(self.hass)
+        stream_coro = session.get(url, timeout=aiohttp.ClientTimeout(total=None))
+        return await async_aiohttp_proxy_web(self.hass, request, stream_coro)
+
+    async def _async_mjpeg_single_frame(
+        self, session: aiohttp.ClientSession, url: str
+    ) -> bytes | None:
         """Вытащить один JPEG-кадр из MJPEG-стрима."""
         try:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 if resp.status != 200:
                     return None
                 buffer = b""

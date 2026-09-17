@@ -15,7 +15,7 @@ from .const import (
 )
 from .coordinator import DomylandConfigEntry, DomylandCoordinator
 
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA]
+PLATFORMS: list[Platform] = [Platform.LOCK, Platform.CAMERA]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: DomylandConfigEntry) -> bool:

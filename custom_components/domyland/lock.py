@@ -1,10 +1,10 @@
-"""Кнопки открытия дверей (домофоны) Domyland."""
+"""Замки (домофоны/калитки) Domyland — открытие двери импульсом."""
 
 from __future__ import annotations
 
 import logging
 
-from homeassistant.components.button import ButtonEntity
+from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -22,13 +22,13 @@ async def async_setup_entry(
     entry: DomylandConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Создать по кнопке на каждую дверь. Отслеживаем появление новых дверей."""
+    """Создать замок на каждую дверь. Отслеживаем появление новых дверей."""
     coordinator = entry.runtime_data
     known: set[tuple[int, int]] = set()
 
     @callback
     def _add_new() -> None:
-        new_entities: list[DomylandDoorButton] = []
+        new_entities: list[DomylandDoorLock] = []
         for building_id, building in coordinator.data.buildings.items():
             for door_id in building.doors:
                 key = (building_id, door_id)
@@ -36,7 +36,7 @@ async def async_setup_entry(
                     continue
                 known.add(key)
                 new_entities.append(
-                    DomylandDoorButton(coordinator, building_id, door_id)
+                    DomylandDoorLock(coordinator, building_id, door_id)
                 )
         if new_entities:
             async_add_entities(new_entities)
@@ -45,10 +45,16 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_new))
 
 
-class DomylandDoorButton(DomylandBuildingEntity, ButtonEntity):
-    """Кнопка «открыть дверь» для одной точки доступа."""
+class DomylandDoorLock(DomylandBuildingEntity, LockEntity):
+    """Домофон/калитка как замок с действием «Открыть».
 
-    _attr_icon = "mdi:door-open"
+    API Domyland умеет только импульсное открытие (PUT .../open) и не сообщает
+    состояние двери. Поэтому замок всегда показываем «заперто» (безопасное
+    состояние по умолчанию), а любое действие открытия шлёт импульс.
+    """
+
+    _attr_supported_features = LockEntityFeature.OPEN
+    _attr_is_locked = True  # состояния от API нет → всегда «заперто»
 
     def __init__(
         self, coordinator: DomylandCoordinator, building_id: int, door_id: int
@@ -78,12 +84,7 @@ class DomylandDoorButton(DomylandBuildingEntity, ButtonEntity):
             and door.get("isAvailable", True)
         )
 
-    @property
-    def entity_picture(self) -> str | None:
-        door = self._door
-        return door.get("image") if door else None
-
-    async def async_press(self) -> None:
+    async def _buzz(self) -> None:
         building = self._building
         if building is None:
             raise HomeAssistantError("Дом недоступен")
@@ -95,4 +96,14 @@ class DomylandDoorButton(DomylandBuildingEntity, ButtonEntity):
             raise HomeAssistantError(f"Не удалось открыть дверь: {err}") from err
         _LOGGER.info("Domyland: открыта дверь %s", self.name)
 
+    async def async_open(self, **kwargs) -> None:
+        """Открыть дверь (импульс)."""
+        await self._buzz()
 
+    async def async_unlock(self, **kwargs) -> None:
+        """Основное действие карточки тоже открывает дверь импульсом."""
+        await self._buzz()
+
+    async def async_lock(self, **kwargs) -> None:
+        """Запирания у домофона нет — дверь закрывается сама. No-op."""
+        return
