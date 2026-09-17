@@ -1,4 +1,4 @@
-"""Камеры ЖК (MJPEG через UJIN) Domyland."""
+"""Камеры Domyland: общедомовые (UJIN) и встроенные камеры домофонов."""
 
 from __future__ import annotations
 
@@ -26,20 +26,28 @@ async def async_setup_entry(
     entry: DomylandConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Создать по камере на каждый streamURL. Отслеживаем появление новых."""
+    """Создать камеры: общедомовые + встроенные в домофоны. Следим за новыми."""
     coordinator = entry.runtime_data
-    known: set[tuple[int, int]] = set()
+    known: set[tuple[str, int, int]] = set()
 
     @callback
     def _add_new() -> None:
-        new_entities: list[DomylandCamera] = []
+        new_entities: list[Camera] = []
         for building_id, building in coordinator.data.buildings.items():
             for cam_id in building.cameras:
-                key = (building_id, cam_id)
-                if key in known:
-                    continue
-                known.add(key)
-                new_entities.append(DomylandCamera(coordinator, building_id, cam_id))
+                key = ("cctv", building_id, cam_id)
+                if key not in known:
+                    known.add(key)
+                    new_entities.append(
+                        DomylandCamera(coordinator, building_id, cam_id)
+                    )
+            for door_id in building.door_cameras:
+                key = ("door", building_id, door_id)
+                if key not in known:
+                    known.add(key)
+                    new_entities.append(
+                        DomylandDoorCamera(coordinator, building_id, door_id)
+                    )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -47,42 +55,36 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_new))
 
 
-class DomylandCamera(DomylandBuildingEntity, Camera):
-    """MJPEG-камера UJIN.
+class _DomylandBaseCamera(DomylandBuildingEntity, Camera):
+    """Общая логика MJPEG-камеры UJIN.
 
     Поток отдаётся как `multipart/x-mixed-replace` (чистый MJPEG), поэтому его
-    нужно проксировать в браузер напрямую, а НЕ через stream-компонент HA (тот
-    рассчитан на RTSP/HLS и на MJPEG деградирует до покадрового опроса — рывки).
-    Подписанный streamURL перевыпускается координатором каждые N минут.
+    проксируем в браузер напрямую, а НЕ через stream-компонент HA (тот рассчитан
+    на RTSP/HLS и на MJPEG деградирует до покадрового опроса — рывки).
+    Подписанный URL перевыпускается координатором каждые N минут.
     """
 
     def __init__(
-        self, coordinator: DomylandCoordinator, building_id: int, cam_id: int
+        self, coordinator: DomylandCoordinator, building_id: int
     ) -> None:
         DomylandBuildingEntity.__init__(self, coordinator, building_id)
         Camera.__init__(self)
-        self._cam_id = cam_id
-        self._attr_unique_id = f"{DOMAIN}_camera_{cam_id}"
 
-    @property
-    def _camera(self) -> dict | None:
-        building = self._building
-        if building is None:
-            return None
-        return building.cameras.get(self._cam_id)
+    def _source(self) -> dict | None:
+        """Словарь с полями камеры (streamURL/video, title, image)."""
+        raise NotImplementedError
+
+    def _stream_url(self) -> str | None:
+        raise NotImplementedError
 
     @property
     def name(self) -> str | None:
-        cam = self._camera
-        return cam.get("title") if cam else None
+        src = self._source()
+        return src.get("title") if src else None
 
     @property
     def available(self) -> bool:
-        return super().available and self._camera is not None
-
-    def _stream_url(self) -> str | None:
-        cam = self._camera
-        return cam.get("streamURL") if cam else None
+        return super().available and self._source() is not None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -97,7 +99,7 @@ class DomylandCamera(DomylandBuildingEntity, Camera):
     async def handle_async_mjpeg_stream(
         self, request: web.Request
     ) -> web.StreamResponse | None:
-        """Живой просмотр: проксируем MJPEG-мультипарт UJIN прямо в браузер."""
+        """Живой просмотр: проксируем MJPEG-мультипарт прямо в браузер."""
         url = self._stream_url()
         if not url:
             return None
@@ -127,3 +129,41 @@ class DomylandCamera(DomylandBuildingEntity, Camera):
         except Exception as err:  # noqa: BLE001 — камера best-effort
             _LOGGER.debug("Не удалось получить кадр камеры %s: %s", self.name, err)
         return None
+
+
+class DomylandCamera(_DomylandBaseCamera):
+    """Общедомовая камера ЖК (GET /cameras → streamURL)."""
+
+    def __init__(
+        self, coordinator: DomylandCoordinator, building_id: int, cam_id: int
+    ) -> None:
+        super().__init__(coordinator, building_id)
+        self._cam_id = cam_id
+        self._attr_unique_id = f"{DOMAIN}_camera_{cam_id}"
+
+    def _source(self) -> dict | None:
+        building = self._building
+        return building.cameras.get(self._cam_id) if building else None
+
+    def _stream_url(self) -> str | None:
+        src = self._source()
+        return src.get("streamURL") if src else None
+
+
+class DomylandDoorCamera(_DomylandBaseCamera):
+    """Встроенная камера домофона (GET /smarthome/access/{id} → video)."""
+
+    def __init__(
+        self, coordinator: DomylandCoordinator, building_id: int, door_id: int
+    ) -> None:
+        super().__init__(coordinator, building_id)
+        self._door_id = door_id
+        self._attr_unique_id = f"{DOMAIN}_access_camera_{door_id}"
+
+    def _source(self) -> dict | None:
+        building = self._building
+        return building.door_cameras.get(self._door_id) if building else None
+
+    def _stream_url(self) -> str | None:
+        src = self._source()
+        return src.get("video") if src else None

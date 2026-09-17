@@ -157,6 +157,22 @@ class DomylandApiClient:
         )
         return data["data"].get("items", [])
 
+    async def get_access_detail(
+        self, access_id: int | str, place_id: int | str, building_id: int | str
+    ) -> dict[str, Any]:
+        """GET /smarthome/access/{id} → детали двери.
+
+        В отличие от списка, отдаёт MJPEG-поток встроенной камеры домофона
+        (`video`, `videoType`) — у каждой двери своя камера.
+        """
+        data = await self._request(
+            "GET",
+            f"/smarthome/access/{access_id}",
+            place_id=place_id,
+            building_id=building_id,
+        )
+        return data["data"]
+
     async def get_cameras(
         self, place_id: int | str, building_id: int | str
     ) -> list[dict[str, Any]]:

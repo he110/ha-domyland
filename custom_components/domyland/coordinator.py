@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,6 +31,8 @@ class BuildingData:
     place_address: str
     doors: dict[int, dict[str, Any]] = field(default_factory=dict)
     cameras: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # Встроенные камеры домофонов (door_id → детали с полем `video`).
+    door_cameras: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -107,6 +110,7 @@ class DomylandCoordinator(DataUpdateCoordinator[DomylandData]):
                         building.place_id, building.building_id
                     )
                     building.cameras = {c["id"]: c for c in cameras}
+                    building.door_cameras = await self._fetch_door_cameras(building)
             except DomylandAuthError as err:
                 raise ConfigEntryAuthFailed(err) from err
             except DomylandError as err:
@@ -118,5 +122,35 @@ class DomylandCoordinator(DataUpdateCoordinator[DomylandData]):
                 )
 
         return DomylandData(buildings=buildings)
+
+    async def _fetch_door_cameras(
+        self, building: BuildingData
+    ) -> dict[int, dict]:
+        """Собрать встроенные камеры домофонов дома.
+
+        Поток камеры (`video`) есть только в детальном ответе по каждой двери,
+        поэтому тянем детали всех дверей параллельно. Подписанный URL
+        перевыпускается при каждом запросе — обновляется вместе с координатором.
+        """
+
+        async def _one(door_id: int) -> tuple[int, dict | None]:
+            try:
+                detail = await self.client.get_access_detail(
+                    door_id, building.place_id, building.building_id
+                )
+            except DomylandError as err:
+                _LOGGER.debug("Нет деталей двери %s: %s", door_id, err)
+                return door_id, None
+            if not detail.get("video"):
+                return door_id, None
+            return door_id, {
+                "title": detail.get("title"),
+                "video": detail["video"],
+                "videoType": detail.get("videoType"),
+                "image": detail.get("image"),
+            }
+
+        results = await asyncio.gather(*(_one(d) for d in building.doors))
+        return {door_id: info for door_id, info in results if info is not None}
 
 
