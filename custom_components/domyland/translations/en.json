@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Domyland — sign in with Yandex",
+        "description": "1. Open the link and sign in with your Yandex ID:\n{auth_url}\n\n2. After signing in Yandex will redirect you to a page (it may fail to open an app — that's fine). Copy the **whole URL** from the address bar, or the `y0_...` token from it.\n\n3. Paste it below.",
+        "data": {
+          "token_input": "Yandex token or post-login URL"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Domyland — re-authenticate",
+        "description": "Yandex token expired. Sign in again:\n{auth_url}\n\nThen paste the new token or the post-login URL.",
+        "data": {
+          "token_input": "Yandex token or post-login URL"
+        }
+      }
+    },
+    "error": {
+      "invalid_token_format": "Couldn't parse the token. Paste a `y0_...` string or the full URL with `#access_token=`.",
+      "invalid_auth": "Domyland rejected the token. Make sure you signed in with the right Yandex ID.",
+      "cannot_connect": "Couldn't reach the Domyland server."
+    },
+    "abort": {
+      "already_configured": "This Domyland account is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Domyland settings",
+        "data": {
+          "enable_cameras": "Create camera entities"
+        }
+      }
+    }
+  }
+}
