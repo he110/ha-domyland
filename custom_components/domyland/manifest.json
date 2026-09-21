@@ -1,7 +1,9 @@
 {
   "domain": "domyland",
   "name": "Domyland (домофоны и камеры ЖК)",
-  "codeowners": ["@he110"],
+  "codeowners": [
+    "@he110"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/he110/ha-domyland",
@@ -9,5 +11,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/he110/ha-domyland/issues",
   "requirements": [],
-  "version": "0.3.0"
+  "version": "0.3.1"
 }
